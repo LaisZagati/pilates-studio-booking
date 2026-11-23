@@ -13,7 +13,6 @@ export default async function manifest(): Promise<MetadataRoute.Manifest> {
     start_url: "/?source=pwa",
     scope: "/",
     display: "standalone",
-    display_override: ["standalone", "minimal-ui"],
     orientation: "portrait",
     background_color: "#fbf8f2",
     theme_color: "#fbf8f2",

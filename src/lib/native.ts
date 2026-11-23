@@ -36,7 +36,7 @@ export function nativePlatform(): "ios" | "android" | "web" {
 /** Installed as a Home Screen app (PWA or Android TWA) rather than a browser tab. */
 export function isStandalone() {
   if (typeof window === "undefined") return false;
-  return window.matchMedia?.("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true;
+  return window.matchMedia?.("(display-mode: standalone)").matches || (navigator as unknown as { standalone?: boolean }).standalone === true;
 }
 
 export type ShareData = { title: string; text: string; url?: string };
