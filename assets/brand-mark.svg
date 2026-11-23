@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Studio mark: a soft roll-up arc and a head, on warm ivory -->
+  <rect width="1024" height="1024" fill="#f4eee3"/>
+  <circle cx="512" cy="512" r="330" fill="#e7dccb"/>
+  <path d="M300 640 C380 400 600 380 700 560" fill="none" stroke="#8c7457" stroke-width="44" stroke-linecap="round"/>
+  <circle cx="716" cy="532" r="44" fill="#8c7457"/>
+  <path d="M270 700 H754" stroke="#2f2a24" stroke-width="20" stroke-linecap="round" opacity=".85"/>
+</svg>

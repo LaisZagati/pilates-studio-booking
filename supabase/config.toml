@@ -1,0 +1,19 @@
+# Supabase CLI configuration (local development with `supabase start`).
+# Link to the hosted project with: supabase link --project-ref <your-project-ref>
+project_id = "pilates-studio-booking"
+
+[api]
+port = 54321
+schemas = ["public"]
+
+[db]
+port = 54322
+major_version = 17
+
+[auth]
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000/auth/callback"]
+enable_signup = true
+
+[auth.email]
+enable_confirmations = true

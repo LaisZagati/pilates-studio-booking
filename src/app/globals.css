@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+/* Studio palette: warm ivory, cream, soft beige, muted neutrals. */
+@theme {
+  --color-ivory: #fbf8f2;
+  --color-cream: #f4eee3;
+  --color-sand: #e7dccb;
+  --color-taupe: #b9a890;
+  --color-clay: #8c7457;
+  --color-ink: #2f2a24;
+  --color-muted: #6f665b;
+  --color-success: #4f7a5a;
+  --color-warning: #b07d2b;
+  --color-danger: #a3453a;
+  --font-serif: var(--font-serif-loaded), "Cormorant Garamond", ui-serif, Georgia, serif;
+  --font-sans: var(--font-sans-loaded), "Inter", ui-sans-serif, system-ui, sans-serif;
+  --radius-card: 1.25rem;
+}
+
+html {
+  background: var(--color-ivory);
+  color: var(--color-ink);
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  font-family: var(--font-sans);
+  min-height: 100dvh;
+  /* iPhone notch / home indicator */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+:focus-visible {
+  outline: 2px solid var(--color-clay);
+  outline-offset: 2px;
+}
+/* 16px inputs stop iOS Safari from zooming on focus */
+input, select, textarea { font-size: 16px; }

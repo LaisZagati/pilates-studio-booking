@@ -1,0 +1,21 @@
+node_modules
+.next
+.env
+.env.local
+.env*.local
+*.tsbuildinfo
+next-env.d.ts
+.vercel
+
+# OS / editor
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+# Supabase local
+supabase/.temp
+supabase/.branches
+# Native builds
+mobile/node_modules
+mobile/ios/App/Pods
+android-twa/*.keystore
+android-twa/app/build
