@@ -4,6 +4,7 @@
 set -uo pipefail
 DB=studio_test
 Q() { psql -d $DB -tA -q -c "$1" 2>&1; }
+Q "update services set schedule_only=false; update business_settings set require_online_payment=false" >/dev/null
 SLOT=$(Q "select (t10 + interval '1 day 5 hours')::text from t_ctx")   # Tue 15:00
 SLOT2=$(Q "select (t10 + interval '1 day 6 hours')::text from t_ctx")  # Tue 16:00
 attempt() { # service-slug slot name email party

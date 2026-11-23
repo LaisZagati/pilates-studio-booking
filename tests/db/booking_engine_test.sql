@@ -34,6 +34,9 @@ insert into auth.users(id, email, email_confirmed_at) values
   ('00000000-0000-0000-0000-0000000000c2', 'bea@client.test',   now());
 insert into public.admins(user_id) values ('00000000-0000-0000-0000-0000000000a1');
 update public.notification_settings set owner_email = 'owner@studio.test';
+-- Sections 1–7 test the open-booking engine; the timetable is tested in section 8.
+update public.services set schedule_only = false;
+update public.business_settings set require_online_payment = false;
 
 -- A Monday 2+ weeks out, 10:00 Madrid time.
 create table public.t_ctx as
@@ -309,6 +312,162 @@ select t_ok((select count(*) from get_booking_by_token((select r->>'reference' f
             'Wrong token reveals nothing');
 select t_ok((select count(*) from get_booking_by_token((select r->>'reference' from g2), null)) = 0,
             'Missing token reveals nothing');
+reset role;
+
+
+-- =====================================================================
+-- 8. AUTOMATED STUDIO: timetable, card payment holds, credits, waitlist
+-- =====================================================================
+reset role;
+update public.services set schedule_only = true;
+update public.business_settings set require_online_payment = true, payment_hold_minutes = 15, cancellation_window_hours = 24;
+insert into auth.users(id, email, email_confirmed_at) values
+  ('00000000-0000-0000-0000-0000000000c3', 'cara@client.test', now()),
+  ('00000000-0000-0000-0000-0000000000c4', 'dani@client.test', now());
+-- Timetable 3 weeks out: Mat Wed 19:00 (4 places), two Privates Thu 09:00 side by side, Duet Thu 09:00 must clash.
+create table public.t8 as
+select (t10 + interval '16 days 9 hours') as mat19,     -- Wednesday 19:00
+       (t10 + interval '17 days' - interval '1 hour') as thu9  -- Thursday 09:00
+  from public.t_ctx;
+grant select on public.t8 to anon, authenticated;
+set role authenticated;
+select t_as('authenticated', '00000000-0000-0000-0000-0000000000a1');
+select t_ok(((create_recurring_series((select mat_id from t_ctx), extract(dow from (select mat19 from t8) at time zone 'Europe/Madrid')::int, '19:00',
+              ((select mat19 from t8) at time zone 'Europe/Madrid')::date, ((select mat19 from t8) at time zone 'Europe/Madrid')::date))->>'created')::int = 1,
+            'Timetable: Mat Wednesday 19:00 created');
+select create_recurring_series((select private_id from t_ctx), extract(dow from (select thu9 from t8) at time zone 'Europe/Madrid')::int, '09:00',
+              ((select thu9 from t8) at time zone 'Europe/Madrid')::date, ((select thu9 from t8) at time zone 'Europe/Madrid')::date);
+select t_ok(((create_recurring_series((select private_id from t_ctx), extract(dow from (select thu9 from t8) at time zone 'Europe/Madrid')::int, '09:00',
+              ((select thu9 from t8) at time zone 'Europe/Madrid')::date, ((select thu9 from t8) at time zone 'Europe/Madrid')::date))->>'created')::int = 1,
+            'Timetable: second Private at the same time takes the second reformer');
+select t_ok(((create_recurring_series((select duet_id from t_ctx), extract(dow from (select thu9 from t8) at time zone 'Europe/Madrid')::int, '09:00',
+              ((select thu9 from t8) at time zone 'Europe/Madrid')::date, ((select thu9 from t8) at time zone 'Europe/Madrid')::date))->>'created')::int = 0,
+            'Timetable: a Duet clashing with two Privates is refused (skipped)');
+insert into packages(name, credits, price_cents, validity_days) values ('5-class pack', 5, 9000, 90);
+reset role;
+
+set role anon;
+select t_as('anon', null);
+select t_ok((select count(*) from get_available_slots((select mat_id from t_ctx),
+              ((select mat19 from t8) at time zone 'Europe/Madrid')::date, ((select mat19 from t8) at time zone 'Europe/Madrid')::date)) = 1,
+            'Timetable: only the scheduled Mat class is offered that day (no open grid)');
+select t_err($$ select book_session((select mat_id from t_ctx), (select mat19 from t8) - interval '2 hours', 'Off Time', 'off@test.com', null) $$,
+             'SLOT_UNAVAILABLE', 'Timetable: times outside the timetable cannot be booked');
+
+-- Card payment hold
+create temp table p1 as select book_session((select mat_id from t_ctx), (select mat19 from t8), 'Card Payer', 'card@test.com', null) as r;
+select t_ok(((select r from p1)->>'requires_payment')::boolean and (select r from p1)->>'status' = 'pending',
+            'Paid booking starts as pending, awaiting card payment');
+select t_ok((select spots_left from get_available_slots((select mat_id from t_ctx),
+              ((select mat19 from t8) at time zone 'Europe/Madrid')::date, ((select mat19 from t8) at time zone 'Europe/Madrid')::date)) = 3,
+            'The pending booking holds its place (3 left)');
+select t_err($$ select confirm_booking_payment(((select r from p1)->>'booking_id')::uuid, 2000, 'cs_test_1') $$,
+             'permission denied', 'Visitors cannot fake a payment confirmation');
+reset role;
+select t_as('service_role', null);
+select t_ok((confirm_booking_payment(((select r from p1)->>'booking_id')::uuid, 2000, 'cs_test_1'))->>'action' = 'confirmed',
+            'Stripe webhook (service role) confirms the booking');
+select t_ok((confirm_booking_payment(((select r from p1)->>'booking_id')::uuid, 2000, 'cs_test_1'))->>'action' = 'none',
+            'Repeated webhook is ignored (idempotent)');
+select t_ok((select status = 'confirmed' and payment_status = 'paid' from bookings where id = ((select r from p1)->>'booking_id')::uuid),
+            'Booking confirmed and marked paid');
+
+-- Unpaid hold expires and frees the place
+create temp table p2 as select book_session((select mat_id from t_ctx), (select mat19 from t8), 'Slow Payer', 'slow@test.com', null) as r;
+update bookings set hold_expires_at = now() - interval '1 minute' where id = ((select r from p2)->>'booking_id')::uuid;
+select run_maintenance();
+select t_ok((select status from bookings where id = ((select r from p2)->>'booking_id')::uuid) = 'cancelled',
+            'Expired unpaid hold is cancelled automatically');
+select t_ok((confirm_booking_payment(((select r from p2)->>'booking_id')::uuid, 2000, 'cs_late'))->>'action' in ('confirmed','refund'),
+            'Late payment after expiry is either re-confirmed (place still free) or refunded');
+
+-- Credits
+select t_as('service_role', null);
+select grant_package_credits((select id from clients where email = 'cara@client.test'), (select id from packages limit 1), 9000, 'cs_pack_1')
+  from (select link_my_client()) x where false;  -- (client row is created on first login below)
+set role authenticated;
+select t_as('authenticated', '00000000-0000-0000-0000-0000000000c3');
+select t_ok(link_my_client() is not null, 'Cara signs in');
+select t_err($$ select book_with_credit((select mat_id from t_ctx), (select mat19 from t8)) $$, 'NO_CREDITS', 'No credits yet → cannot book with credit');
+reset role;
+select t_as('service_role', null);
+select grant_package_credits((select id from clients where email = 'cara@client.test'), (select id from packages limit 1), 9000, 'cs_pack_1');
+select grant_package_credits((select id from clients where email = 'cara@client.test'), (select id from packages limit 1), 9000, 'cs_pack_1');
+select t_ok((select count(*) from client_credits where provider_ref = 'cs_pack_1') = 1
+            and (select credits_total from client_credits where provider_ref = 'cs_pack_1') = 5,
+            'Pack purchase webhook grants 5 credits once (idempotent)');
+set role authenticated;
+select t_as('authenticated', '00000000-0000-0000-0000-0000000000c3');
+create temp table cbk as select book_with_credit((select mat_id from t_ctx), (select mat19 from t8)) as r;
+select t_ok((select r->>'status' from cbk) = 'confirmed' and (select credits_used from client_credits) = 1,
+            'Booking with a credit confirms instantly and uses 1 credit');
+create temp table ccx as select cancel_booking(((select r from cbk)->>'booking_id')::uuid) as r;
+select t_ok(((select r from ccx)->>'credit_returned')::int = 1 and (select credits_used from client_credits) = 0,
+            'Cancelling in time returns the credit');
+select book_with_credit((select mat_id from t_ctx), (select mat19 from t8));
+
+-- Fill the class: card(1) + cara(1) + 2 more
+reset role;
+select t_as('anon', null);
+set role anon;
+select book_session((select mat_id from t_ctx), (select mat19 from t8), 'Filler One', 'f1@test.com', null);
+select book_session((select mat_id from t_ctx), (select mat19 from t8), 'Filler Two', 'f2@test.com', null);
+select t_ok((select spots_left from get_available_slots((select mat_id from t_ctx),
+              ((select mat19 from t8) at time zone 'Europe/Madrid')::date, ((select mat19 from t8) at time zone 'Europe/Madrid')::date)) = 0,
+            'Class full: shown with 0 places (so the app can offer the waitlist)');
+reset role;
+
+-- Waitlist: Dani (with credit) joins
+select t_as('service_role', null);
+set role authenticated;
+select t_as('authenticated', '00000000-0000-0000-0000-0000000000c4');
+select link_my_client();
+reset role;
+select t_as('service_role', null);
+select grant_package_credits((select id from clients where email = 'dani@client.test'), (select id from packages limit 1), 9000, 'cs_pack_2');
+set role authenticated;
+select t_as('authenticated', '00000000-0000-0000-0000-0000000000c4');
+select t_ok(join_waitlist((select g.session_id from get_available_slots((select mat_id from t_ctx), ((select mat19 from t8) at time zone 'Europe/Madrid')::date, ((select mat19 from t8) at time zone 'Europe/Madrid')::date) g)) is not null,
+            'Dani joins the waitlist of the full class');
+select t_err($$ select join_waitlist((select g.session_id from get_available_slots((select mat_id from t_ctx), ((select mat19 from t8) at time zone 'Europe/Madrid')::date, ((select mat19 from t8) at time zone 'Europe/Madrid')::date) g)) $$,
+             'ALREADY_WAITLISTED', 'Cannot join twice');
+-- Cara cancels → Dani is booked automatically with her credit
+select t_as('authenticated', '00000000-0000-0000-0000-0000000000c3');
+reset role;
+create temp table cara_bk as select b.id from bookings b join clients c on c.id = b.client_id
+ where c.email = 'cara@client.test' and b.status = 'confirmed';
+grant select on cara_bk to authenticated;
+set role authenticated;
+select t_as('authenticated', '00000000-0000-0000-0000-0000000000c3');
+select cancel_booking((select id from cara_bk));
+select t_as('authenticated', '00000000-0000-0000-0000-0000000000c4');
+select t_ok((select status from waitlist_entries) = 'booked'
+            and (select count(*) from bookings where status = 'confirmed' and paid_with = 'credit') = 1,
+            'Cancellation auto-books the first waitlisted client using her credit');
+reset role;
+select t_ok((select count(*) from notifications where type = 'waitlist_booked') = 1, 'Waitlist "you are booked" email queued');
+
+-- Waitlist without credit → offer (hold) email
+select t_as('authenticated', '00000000-0000-0000-0000-0000000000c2');
+set role authenticated;
+select t_as('authenticated', '00000000-0000-0000-0000-0000000000c2');
+select t_ok(join_waitlist((select g.session_id from get_available_slots((select mat_id from t_ctx), ((select mat19 from t8) at time zone 'Europe/Madrid')::date, ((select mat19 from t8) at time zone 'Europe/Madrid')::date) g)) is not null,
+            'Bea (no credits) joins the waitlist');
+reset role;
+update bookings set status = 'cancelled' where id = (select b.id from bookings b join clients c on c.id = b.client_id where c.email = 'f1@test.com' and b.status <> 'cancelled' limit 1);
+select _promote_waitlist((select g.session_id from get_available_slots((select mat_id from t_ctx), ((select mat19 from t8) at time zone 'Europe/Madrid')::date, ((select mat19 from t8) at time zone 'Europe/Madrid')::date) g));
+select t_ok((select w.status from waitlist_entries w join clients c on c.id = w.client_id where c.email = 'bea@client.test') = 'offered'
+            and (select count(*) from notifications where type = 'waitlist_offer') = 1,
+            'Without credits she gets a held place + "pay to confirm" offer email');
+
+-- Timetabled Private side by side
+set role anon;
+select t_as('anon', null);
+select book_session((select private_id from t_ctx), (select thu9 from t8), 'Priv One', 'p1@test.com', null);
+select t_ok((book_session((select private_id from t_ctx), (select thu9 from t8), 'Priv Two', 'p2@test.com', null))->>'status' = 'pending',
+            'Second timetabled Private at the same time books the other reformer session');
+select t_err($$ select book_session((select private_id from t_ctx), (select thu9 from t8), 'Priv Three', 'p3@test.com', null) $$,
+             'SLOT_UNAVAILABLE', 'Third Private refused: both timetabled sessions taken');
 reset role;
 
 -- Final invariant: no reformer ever double-held
