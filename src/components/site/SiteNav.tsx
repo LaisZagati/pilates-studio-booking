@@ -24,7 +24,13 @@ export function SiteHeader({ studioName, logoUrl }: { studioName: string; logoUr
           <span>{studioName}</span>
         </Link>
         <nav aria-label="Main" className="hidden items-center gap-8 text-sm md:flex">
-          {TABS.slice(1, 2).concat(TABS.slice(3)).map((t) => (
+          {TABS.slice(1, 2).map((t) => (
+            <Link key={t.href} href={t.href} className={t.match(pathname) ? "text-ink" : "text-muted hover:text-ink"}>
+              {t.label}
+            </Link>
+          ))}
+          <Link href="/packs" className={pathname.startsWith("/packs") ? "text-ink" : "text-muted hover:text-ink"}>Packs</Link>
+          {TABS.slice(3).map((t) => (
             <Link key={t.href} href={t.href} className={t.match(pathname) ? "text-ink" : "text-muted hover:text-ink"}>
               {t.label}
             </Link>

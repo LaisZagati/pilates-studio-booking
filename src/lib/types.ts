@@ -37,4 +37,14 @@ export type Settings = {
 
 export type OpeningRule = { weekday: number; start_time: string; end_time: string; service_id: string | null };
 
-export type Slot = { startsAt: string; endsAt: string; spotsLeft: number };
+export type Slot = { startsAt: string; endsAt: string; spotsLeft: number; sessionId: string | null };
+
+export type Pack = {
+  id: string; name: string; description: string | null; kind: "pack" | "membership";
+  credits: number; price_cents: number; validity_days: number; service_ids: string[] | null; sort_order: number;
+};
+
+export type Credit = {
+  id: string; label: string; credits_total: number; credits_used: number;
+  service_ids: string[] | null; expires_at: string;
+};

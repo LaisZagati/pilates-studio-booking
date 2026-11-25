@@ -19,7 +19,7 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
   const { supabase, user } = await requireUser();
   await supabase.rpc("link_my_client");
 
-  const [s, { data: client }, { data: rows }, { data: isAdmin }] = await Promise.all([
+  const [s, { data: client }, { data: rows }, { data: isAdmin }, { data: creditRows }] = await Promise.all([
     getSettings(),
     supabase.from("clients").select("full_name, phone, created_at").maybeSingle(),
     supabase
@@ -27,7 +27,15 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
       .select("id, reference, status, payment_status, party_size, price_cents, sessions(starts_at, ends_at, services(name)), reschedule_requests(status)")
       .limit(200),
     supabase.rpc("is_admin"),
+    supabase
+      .from("client_credits")
+      .select("id, label, credits_total, credits_used, expires_at")
+      .gt("expires_at", new Date().toISOString())
+      .order("expires_at"),
   ]);
+  const credits = ((creditRows ?? []) as { id: string; label: string; credits_total: number; credits_used: number; expires_at: string }[])
+    .filter((c) => c.credits_total > c.credits_used);
+  const creditsLeft = credits.reduce((n, c) => n + c.credits_total - c.credits_used, 0);
 
   const now = Date.now();
   const bookings: AccountBooking[] = ((rows ?? []) as unknown as Row[])
@@ -71,9 +79,31 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
 
       <dl className="mt-6 grid grid-cols-3 gap-3">
         <Stat label="Upcoming" value={String(upcoming.length)} />
+        <Stat label="Credits" value={String(creditsLeft)} />
         <Stat label="Visits" value={String(visits)} />
-        <Stat label="Member since" value={client?.created_at ? new Intl.DateTimeFormat("en-GB", { month: "short", year: "numeric", timeZone: s.timezone }).format(new Date(client.created_at)) : "—"} />
       </dl>
+
+      <section className="mt-6 rounded-[var(--radius-card)] bg-cream p-5">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="font-medium">My class credits</h2>
+          <Link href="/packs" className="text-sm text-clay underline">Buy a pack</Link>
+        </div>
+        {credits.length === 0 ? (
+          <p className="mt-2 text-sm text-muted">No credits yet. Packs and memberships let you book in one tap and save on each class.</p>
+        ) : (
+          <ul className="mt-3 space-y-2 text-sm">
+            {credits.map((c) => (
+              <li key={c.id} className="flex items-center justify-between gap-3 rounded-xl bg-white px-4 py-3">
+                <span>{c.label}</span>
+                <span className="text-right text-muted">
+                  <strong className="text-ink">{c.credits_total - c.credits_used}</strong> left · until{" "}
+                  {new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: s.timezone }).format(new Date(c.expires_at))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       <nav aria-label="Account sections" className="mt-8 flex gap-1 rounded-full bg-cream p-1 text-sm">
         {[["upcoming", `Upcoming (${upcoming.length})`], ["past", "History"], ["details", "My details"]].map(([id, label]) => (

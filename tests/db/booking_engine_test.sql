@@ -470,6 +470,43 @@ select t_err($$ select book_session((select private_id from t_ctx), (select thu9
              'SLOT_UNAVAILABLE', 'Third Private refused: both timetabled sessions taken');
 reset role;
 
+
+-- =====================================================================
+-- 9. Demo payment mode
+-- =====================================================================
+reset role;
+insert into sessions(service_id, starts_at, ends_at, capacity)
+select private_id, (select thu9 from t8) + interval '1 day', (select thu9 from t8) + interval '1 day 1 hour', 1 from t_ctx;
+select _allocate_resources((select id from sessions where starts_at = (select thu9 from t8) + interval '1 day'));
+set role anon;
+select t_as('anon', null);
+create temp table dp as select book_session((select private_id from t_ctx), (select thu9 from t8) + interval '1 day', 'Demo Payer', 'demo@test.com', null) as r;
+select t_ok((select count(*) from get_payment_details((select r->>'reference' from dp), (select r->>'manage_token' from dp))) = 1,
+            'Payment page finds the booking with its private link');
+select t_ok((select count(*) from get_payment_details((select r->>'reference' from dp), repeat('a', 48))) = 0,
+            'Payment page reveals nothing with a wrong link');
+select t_ok((demo_pay_booking((select r->>'reference' from dp), (select r->>'manage_token' from dp), false))->>'status' = 'declined',
+            'Demo "declined card" changes nothing');
+select t_ok((select status from get_payment_details((select r->>'reference' from dp), (select r->>'manage_token' from dp))) = 'pending',
+            'Still pending after a declined demo card');
+select t_ok((demo_pay_booking((select r->>'reference' from dp), (select r->>'manage_token' from dp)))->>'status' = 'confirmed',
+            'Demo payment confirms the booking');
+reset role;
+select t_ok((select provider = 'demo' and method = 'other' and note like 'Demo payment%' from payments
+              where booking_id = ((select r from dp)->>'booking_id')::uuid),
+            'Demo payment is recorded as a demo, not as real money');
+-- packs in demo mode
+set role authenticated;
+select t_as('authenticated', '00000000-0000-0000-0000-0000000000c2');
+select t_ok(((demo_buy_package((select id from packages limit 1)))->>'credits')::int = 5, 'Demo pack purchase adds credits');
+reset role;
+update business_settings set payment_mode = 'stripe';
+set role anon;
+select t_as('anon', null);
+select t_err($$ select demo_pay_booking('PS-XXXXXX', repeat('a', 48)) $$, 'DEMO_DISABLED', 'Demo payments are impossible once Stripe is switched on');
+reset role;
+update business_settings set payment_mode = 'demo';
+
 -- Final invariant: no reformer ever double-held
 select t_ok(not exists (
   select 1 from session_resources a join session_resources b

@@ -1,14 +1,16 @@
 "use server";
 import { z } from "zod";
+import { after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { toBookingError } from "@/lib/booking-errors";
 import { addDaysKey, dateKey } from "@/lib/format";
 import { getSettings } from "@/lib/studio";
+import { runNotificationQueue } from "@/lib/email/queue";
 import type { Slot } from "@/lib/types";
 
 const uuid = z.string().uuid();
 
-/** Live availability for the whole booking window, straight from the engine. */
+/** Live timetable for the whole booking window, straight from the engine. Full sessions are included (spotsLeft 0). */
 export async function getSlots(serviceId: string): Promise<{ slots: Slot[]; error?: string }> {
   if (!uuid.safeParse(serviceId).success) return { slots: [], error: "Unknown service." };
   const s = await getSettings();
@@ -16,12 +18,13 @@ export async function getSlots(serviceId: string): Promise<{ slots: Slot[]; erro
   const to = addDaysKey(from, Math.min(s.max_advance_days, 60));
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("get_available_slots", { p_service_id: serviceId, p_from: from, p_to: to });
-  if (error) return { slots: [], error: "We couldn't load availability. Please try again." };
+  if (error) return { slots: [], error: "We couldn't load the timetable. Please try again." };
   return {
-    slots: (data ?? []).map((r: { starts_at: string; ends_at: string; spots_left: number }) => ({
+    slots: (data ?? []).map((r: { starts_at: string; ends_at: string; spots_left: number; session_id: string | null }) => ({
       startsAt: r.starts_at,
       endsAt: r.ends_at,
       spotsLeft: r.spots_left,
+      sessionId: r.session_id,
     })),
   };
 }
@@ -44,8 +47,18 @@ const bookingInput = z.object({
 });
 
 export type BookingResult =
-  | { ok: true; reference: string; manageToken: string | null; status: string }
+  | { ok: true; reference: string; manageToken: string | null; status: string; requiresPayment: boolean }
   | { ok: false; code: string; message: string };
+
+function sendEmailsSoon() {
+  after(async () => {
+    try {
+      await runNotificationQueue();
+    } catch {
+      /* emails stay queued */
+    }
+  });
+}
 
 export async function createBooking(input: z.input<typeof bookingInput>): Promise<BookingResult> {
   const parsed = bookingInput.safeParse(input);
@@ -67,6 +80,41 @@ export async function createBooking(input: z.input<typeof bookingInput>): Promis
     const e = toBookingError(error);
     return { ok: false, code: e.code, message: e.message };
   }
-  const r = data as { reference: string; manage_token?: string; status: string };
-  return { ok: true, reference: r.reference, manageToken: r.manage_token ?? null, status: r.status };
+  const r = data as { reference: string; manage_token?: string; status: string; requires_payment?: boolean };
+  if (!r.requires_payment) sendEmailsSoon();
+  return { ok: true, reference: r.reference, manageToken: r.manage_token ?? null, status: r.status, requiresPayment: !!r.requires_payment };
+}
+
+const creditInput = z.object({
+  serviceId: uuid,
+  startsAt: z.string().datetime({ offset: true }),
+  partySize: z.number().int().min(1).max(50),
+  idempotencyKey: z.string().min(8).max(100),
+});
+
+export async function bookWithCredit(input: z.input<typeof creditInput>): Promise<BookingResult> {
+  const parsed = creditInput.safeParse(input);
+  if (!parsed.success) return { ok: false, code: "INVALID", message: "Something went wrong. Please try again." };
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("book_with_credit", {
+    p_service_id: parsed.data.serviceId,
+    p_starts_at: parsed.data.startsAt,
+    p_party_size: parsed.data.partySize,
+    p_idempotency_key: parsed.data.idempotencyKey,
+  });
+  if (error) {
+    const e = toBookingError(error);
+    return { ok: false, code: e.code, message: e.message };
+  }
+  const r = data as { reference: string; status: string };
+  sendEmailsSoon();
+  return { ok: true, reference: r.reference, manageToken: null, status: r.status, requiresPayment: false };
+}
+
+export async function joinWaitlist(sessionId: string, partySize = 1): Promise<{ ok: boolean; message: string }> {
+  if (!uuid.safeParse(sessionId).success) return { ok: false, message: "Session not found." };
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("join_waitlist", { p_session_id: sessionId, p_party_size: partySize });
+  if (error) return { ok: false, message: toBookingError(error).message };
+  return { ok: true, message: "You're on the waitlist. If a place opens up we'll book it for you (with a credit) or email you." };
 }

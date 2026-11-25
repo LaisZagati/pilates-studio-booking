@@ -9,7 +9,10 @@ export default async function ServicesPage() {
   return (
     <main className="mx-auto max-w-6xl px-5 py-10">
       <h1 className="font-serif text-5xl">Classes</h1>
-      <p className="mt-3 max-w-xl text-muted">Every session lasts an hour and is taught by a qualified instructor. Choose the format that suits you.</p>
+      <p className="mt-3 max-w-xl text-muted">
+        Every session lasts an hour and is taught by a qualified instructor. Choose the format that suits you — or save with a{" "}
+        <a href="/packs" className="text-clay underline">class pack</a>.
+      </p>
       <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {services.map((svc, i) => <ServiceCard key={svc.id} service={svc} currency={s.currency} index={i} />)}
       </div>

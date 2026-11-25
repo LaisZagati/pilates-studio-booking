@@ -47,6 +47,11 @@ export default async function ManagePage({ searchParams }: { searchParams: Promi
             <div className="flex justify-between py-3"><dt className="text-muted">Price</dt><dd>{formatPrice(booking.price_cents, s.currency)}</dd></div>
             <div className="flex justify-between py-3"><dt className="text-muted">Status</dt><dd className="capitalize">{booking.status}</dd></div>
           </dl>
+          {booking.status === "pending" && (
+            <Link href={`/pay/${booking.reference}?t=${token}`} className="mt-6 block rounded-full bg-ink px-6 py-4 text-center text-ivory">
+              Awaiting payment · Pay now
+            </Link>
+          )}
           {booking.can_cancel ? (
             <CancelGuestBooking reference={booking.reference} token={token} />
           ) : (

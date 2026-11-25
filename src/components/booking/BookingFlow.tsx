@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { createBooking, getSlots, type BookingResult } from "@/app/(site)/book/actions";
+import { useRouter } from "next/navigation";
+import { bookWithCredit, createBooking, getSlots, joinWaitlist, type BookingResult } from "@/app/(site)/book/actions";
 import { formatDateLong, formatPrice, formatTime, dateKey, keyParts } from "@/lib/format";
-import type { Service, Slot } from "@/lib/types";
+import type { Credit, Service, Slot } from "@/lib/types";
 import { CheckIcon, ChevronLeft, ClockIcon, PeopleIcon } from "@/components/icons";
 import { ShareButton } from "@/components/ShareButton";
 
@@ -31,6 +32,7 @@ export function BookingFlow({
   cancellationPolicy,
   cancellationHours,
   prefill,
+  credits = [],
 }: {
   services: Service[];
   initialServiceSlug?: string;
@@ -39,7 +41,9 @@ export function BookingFlow({
   cancellationPolicy: string | null;
   cancellationHours: number;
   prefill: Prefill;
+  credits?: Credit[];
 }) {
+  const router = useRouter();
   const initial = services.find((s) => s.slug === initialServiceSlug) ?? null;
   const [step, setStep] = useState<Step>(initial ? "time" : "service");
   const [service, setService] = useState<Service | null>(initial);
@@ -53,6 +57,9 @@ export function BookingFlow({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Extract<BookingResult, { ok: true }> | null>(null);
   const [pending, startTransition] = useTransition();
+  const [fullSlot, setFullSlot] = useState<Slot | null>(null);
+  const [waitMsg, setWaitMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [payWith, setPayWith] = useState<"card" | "credit">("card");
   const idemKey = useRef(newKey());
   const topRef = useRef<HTMLDivElement>(null);
 
@@ -93,6 +100,15 @@ export function BookingFlow({
 
   const maxParty = service ? (service.is_group ? Math.min(service.capacity, slot?.spotsLeft ?? service.capacity) : service.capacity) : 1;
   const total = service ? (service.is_group ? service.price_cents * partySize : service.price_cents) : 0;
+  const creditsLeft = service
+    ? credits
+        .filter((c) => (!c.service_ids || c.service_ids.includes(service.id)) && (!slot || new Date(c.expires_at) > new Date(slot.startsAt)))
+        .reduce((n, c) => n + (c.credits_total - c.credits_used), 0)
+    : 0;
+  const canUseCredit = prefill.signedIn && creditsLeft >= partySize;
+  useEffect(() => {
+    setPayWith(canUseCredit ? "credit" : "card");
+  }, [canUseCredit]);
 
   function refreshSlots() {
     if (!service) return;
@@ -106,17 +122,24 @@ export function BookingFlow({
     if (!service || !slot) return;
     setError(null);
     startTransition(async () => {
-      const r = await createBooking({
-        serviceId: service.id,
-        startsAt: slot.startsAt,
-        partySize,
-        fullName: form.fullName,
-        email: form.email,
-        phone: form.phone,
-        notes: form.notes,
-        idempotencyKey: idemKey.current,
-        acceptPolicy: accept as true,
-      });
+      const r =
+        payWith === "credit" && canUseCredit
+          ? await bookWithCredit({ serviceId: service.id, startsAt: slot.startsAt, partySize, idempotencyKey: idemKey.current })
+          : await createBooking({
+              serviceId: service.id,
+              startsAt: slot.startsAt,
+              partySize,
+              fullName: form.fullName,
+              email: form.email,
+              phone: form.phone,
+              notes: form.notes,
+              idempotencyKey: idemKey.current,
+              acceptPolicy: accept as true,
+            });
+      if (r.ok && r.requiresPayment) {
+        router.push(`/pay/${r.reference}${r.manageToken ? `?t=${r.manageToken}` : ""}`);
+        return;
+      }
       if (r.ok) {
         setResult(r);
         setStep("done");
@@ -205,7 +228,7 @@ export function BookingFlow({
           )}
           {slots && slots.length === 0 && !loadError && (
             <p className="mt-8 rounded-[var(--radius-card)] bg-cream p-6 text-muted">
-              There are no free times in the booking window right now. Please check back soon or contact the studio.
+              No sessions are on the timetable for this class yet. Please check back soon or contact the studio.
             </p>
           )}
 
@@ -245,28 +268,76 @@ export function BookingFlow({
                   <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">
                     {(byDay.get(day) ?? []).map((s) => {
                       const active = slot?.startsAt === s.startsAt;
+                      const full = s.spotsLeft <= 0;
                       return (
                         <button
                           key={s.startsAt}
                           type="button"
-                          aria-pressed={active}
+                          aria-pressed={active || fullSlot?.startsAt === s.startsAt}
                           onClick={() => {
-                            setSlot(s);
                             setError(null);
+                            setWaitMsg(null);
+                            if (full) {
+                              setSlot(null);
+                              setFullSlot(s);
+                              return;
+                            }
+                            setFullSlot(null);
+                            setSlot(s);
                             if (service.is_group) setPartySize((n) => Math.min(n, s.spotsLeft));
                           }}
                           className={`rounded-xl border px-2 py-3 text-center transition ${
-                            active ? "border-ink bg-ink text-ivory" : "border-sand bg-white hover:border-taupe"
+                            active
+                              ? "border-ink bg-ink text-ivory"
+                              : full
+                                ? fullSlot?.startsAt === s.startsAt
+                                  ? "border-taupe bg-cream text-muted"
+                                  : "border-sand bg-cream/60 text-muted"
+                                : "border-sand bg-white hover:border-taupe"
                           }`}
                         >
-                          <span className="block font-medium">{formatTime(s.startsAt, timeZone)}</span>
-                          {service.is_group && (
-                            <span className="block text-[11px] opacity-75">{s.spotsLeft} {s.spotsLeft === 1 ? "spot" : "spots"} left</span>
+                          <span className={`block font-medium ${full ? "line-through decoration-1" : ""}`}>{formatTime(s.startsAt, timeZone)}</span>
+                          {full ? (
+                            <span className="block text-[11px]">Full · waitlist</span>
+                          ) : (
+                            service.is_group && (
+                              <span className="block text-[11px] opacity-75">{s.spotsLeft} {s.spotsLeft === 1 ? "spot" : "spots"} left</span>
+                            )
                           )}
                         </button>
                       );
                     })}
                   </div>
+                </div>
+              )}
+
+              {fullSlot && (
+                <div className="mt-4 rounded-[var(--radius-card)] border border-sand bg-white p-4 text-sm">
+                  <p>
+                    {formatDateLong(fullSlot.startsAt, timeZone)} at {formatTime(fullSlot.startsAt, timeZone)} is full.
+                    Join the waitlist and we&apos;ll book you automatically if a place opens (using a credit), or email you to confirm.
+                  </p>
+                  {waitMsg && <p role="status" className={`mt-2 ${waitMsg.ok ? "text-success" : "text-danger"}`}>{waitMsg.text}</p>}
+                  {!waitMsg?.ok &&
+                    (prefill.signedIn ? (
+                      <button
+                        type="button"
+                        disabled={pending || !fullSlot.sessionId}
+                        onClick={() =>
+                          startTransition(async () => {
+                            const r = await joinWaitlist(fullSlot.sessionId!, partySize);
+                            setWaitMsg({ ok: r.ok, text: r.message });
+                          })
+                        }
+                        className="mt-3 w-full rounded-full border border-ink px-5 py-3 disabled:opacity-50"
+                      >
+                        {pending ? "Joining…" : "Join the waitlist"}
+                      </button>
+                    ) : (
+                      <Link href="/login?next=/book" className="mt-3 block rounded-full border border-ink px-5 py-3 text-center">
+                        Sign in to join the waitlist
+                      </Link>
+                    ))}
                 </div>
               )}
 
@@ -347,10 +418,38 @@ export function BookingFlow({
               {cancellationPolicy ? `: ${cancellationPolicy}` : ` (free cancellation up to ${cancellationHours} hours before).`}
             </span>
           </label>
-          <p className="mt-3 text-sm text-muted">Payment is taken at the studio.</p>
+          <fieldset className="mt-6">
+            <legend className="mb-2 text-sm text-muted">How would you like to pay?</legend>
+            <div className="space-y-2">
+              {canUseCredit && (
+                <label className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border p-4 ${payWith === "credit" ? "border-ink" : "border-sand"}`}>
+                  <span className="flex items-center gap-3">
+                    <input type="radio" name="pay" checked={payWith === "credit"} onChange={() => setPayWith("credit")} className="h-5 w-5 accent-[var(--color-ink)]" />
+                    <span>Use {partySize === 1 ? "1 credit" : `${partySize} credits`}</span>
+                  </span>
+                  <span className="text-sm text-muted">{creditsLeft} left</span>
+                </label>
+              )}
+              <label className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border p-4 ${payWith === "card" ? "border-ink" : "border-sand"}`}>
+                <span className="flex items-center gap-3">
+                  <input type="radio" name="pay" checked={payWith === "card"} onChange={() => setPayWith("card")} className="h-5 w-5 accent-[var(--color-ink)]" />
+                  <span>Pay online now</span>
+                </span>
+                <span className="text-sm text-muted">{formatPrice(total, currency)}</span>
+              </label>
+            </div>
+            {payWith === "card" && (
+              <p className="mt-2 text-xs text-muted">Your place is held for 30 minutes while you pay on the next page.</p>
+            )}
+            {!prefill.signedIn && (
+              <p className="mt-2 text-xs text-muted">
+                Have a class pack? <Link href="/login?next=/book" className="text-clay underline">Sign in</Link> to use your credits.
+              </p>
+            )}
+          </fieldset>
           {error && <p role="alert" className="mt-4 rounded-xl bg-danger/10 px-4 py-3 text-sm text-danger">{error}</p>}
           <PrimaryButton disabled={!accept || pending} onClick={submit}>
-            {pending ? "Booking…" : "Confirm booking"}
+            {pending ? "Booking…" : payWith === "credit" && canUseCredit ? "Book with credit" : `Continue to payment · ${formatPrice(total, currency)}`}
           </PrimaryButton>
         </section>
       )}

@@ -66,6 +66,7 @@ create table public.client_credits (
 );
 create index client_credits_client_idx on public.client_credits(client_id, expires_at);
 create unique index client_credits_provider_ref_uidx on public.client_credits(provider_ref) where provider_ref is not null;
+create index client_credits_package_idx on public.client_credits(package_id);
 
 -- Payments can now belong to a booking OR a credit purchase.
 alter table public.payments alter column booking_id drop not null;

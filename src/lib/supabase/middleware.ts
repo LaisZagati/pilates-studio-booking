@@ -53,7 +53,7 @@ export async function updateSession(request: NextRequest) {
   }
 
   // Private pages must never be stored by the browser or service worker caches.
-  if (isAdminArea || isAccountArea || path.startsWith("/manage") || path.startsWith("/book")) {
+  if (isAdminArea || isAccountArea || path.startsWith("/manage") || path.startsWith("/book") || path.startsWith("/pay") || path.startsWith("/packs")) {
     response.headers.set("Cache-Control", "private, no-store");
   }
   return response;

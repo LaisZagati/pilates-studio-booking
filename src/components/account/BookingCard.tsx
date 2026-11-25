@@ -28,7 +28,7 @@ const STATUS_STYLE: Record<string, string> = {
 const PAY_LABEL: Record<string, string> = {
   paid: "Paid",
   partial: "Partly paid",
-  unpaid: "Pay at the studio",
+  unpaid: "Not paid yet",
   refunded: "Refunded",
 };
 
@@ -74,6 +74,11 @@ export function BookingCard({
         <div><dt className="text-xs text-muted">Payment</dt><dd>{PAY_LABEL[b.payment_status] ?? b.payment_status}</dd></div>
       </dl>
 
+      {b.status === "pending" && upcoming && !cancelState.message && (
+        <a href={`/pay/${b.reference}`} className="mt-4 block rounded-full bg-ink px-5 py-3 text-center text-sm text-ivory">
+          Awaiting payment · Pay now
+        </a>
+      )}
       {b.has_open_request && upcoming && (
         <p className="mt-3 rounded-xl bg-cream px-3 py-2 text-sm text-muted">Change requested — the studio will get back to you.</p>
       )}

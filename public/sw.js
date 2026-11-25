@@ -5,11 +5,11 @@
  * - Public pages: network-first, falling back to the last copy, then /offline.html.
  * Bump VERSION to drop old caches on deploy.
  */
-const VERSION = "v1";
+const VERSION = "v2";
 const STATIC = `static-${VERSION}`;
 const PAGES = `pages-${VERSION}`;
 const PRECACHE = ["/offline.html", "/icons/icon-192.png"];
-const PRIVATE = [/^\/admin/, /^\/account/, /^\/book/, /^\/manage/, /^\/auth/, /^\/api/, /^\/login/, /^\/signup/];
+const PRIVATE = [/^\/admin/, /^\/account/, /^\/book/, /^\/manage/, /^\/auth/, /^\/api/, /^\/login/, /^\/signup/, /^\/pay/, /^\/packs/];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(STATIC).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting()));

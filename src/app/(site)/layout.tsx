@@ -26,6 +26,7 @@ export default async function SiteLayout({ children }: { children: React.ReactNo
             <div className="space-y-1 md:text-right">
               <p><Link href="/services" className="hover:text-ink">Classes</Link></p>
               <p><Link href="/book" className="hover:text-ink">Book online</Link></p>
+              <p><Link href="/packs" className="hover:text-ink">Packs &amp; memberships</Link></p>
               <p><Link href="/manage" className="hover:text-ink">Manage a booking</Link></p>
               {s.instagram_url && <p><a href={s.instagram_url} target="_blank" rel="noopener noreferrer" className="hover:text-ink">Instagram</a></p>}
             </div>
